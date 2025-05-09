@@ -3,6 +3,8 @@ use services::{
     payment_service_server::{PaymentService, PaymentServiceServer}, PaymentRequest, PaymentResponse,
     transaction_service_server::{TransactionService, TransactionServiceServer},
     TransactionRequest, TransactionResponse,
+    chat_service_server::{ChatService, ChatServiceServer},
+    ChatMessage
 };
 use tokio::sync::mpsc;
 use tokio_stream::wrappers::ReceiverStream;
@@ -14,6 +16,7 @@ pub mod services {
 #[derive(Debug,Default)]
 struct MyPaymentService{}
 struct MyTransactionService{}
+struct MyChatService{}
 
 #[tonic::async_trait]
 impl PaymentService for MyPaymentService {
@@ -61,6 +64,29 @@ impl TransactionService for MyTransactionService {
     }
 }
 
+#[tonic::async_trait]
+impl ChatService for MyChatService {
+    async fn chat(
+        &self,
+        request: Request<tonic::Streaming<ChatMessage>>,
+    ) -> Result<Response<ReceiverStream<ChatMessage>>, Status> {
+        let mut stream = request.into_inner();
+        let (tx, rx) = mpsc::channel(10);
+
+        tokio::spawn(async move {
+            while let Ok(Some(message)) = stream.message().await {
+                let reply = ChatMessage {
+                    user_id: "server".to_string(),
+                    message: format!("Echo: {}", message.message),
+                };
+                tx.send(reply).await.unwrap_or_else(|_| {});
+            }
+        });
+
+        Ok(Response::new(ReceiverStream::new(rx)))
+    }
+}
+
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let addr = "[::1]:50051".parse()?;
@@ -69,6 +95,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     Server::builder()
         .add_service(PaymentServiceServer::new(payment_service))
         .add_service(TransactionServiceServer::new(MyTransactionService::default()))
+        .add_service(ChatServiceServer::new(MyChatService::default()))
         .serve(addr)
         .await?;
 
